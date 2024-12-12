@@ -1,36 +1,98 @@
-import cv2
 import numpy as np
+import cv2 as cv
+import math
 
-imagen = 'triangulo1.png'
-mask = cv2.imread('triangulo.png', cv2.IMREAD_UNCHANGED)  # Cargar la máscara
+# variables
+traslacion_x = 0
+traslacion_y = 0
 
-imagen = cv2.imread(imagen, cv2.IMREAD_UNCHANGED)
-video = cv2.VideoCapture(0)
+imagen = cv.imread('triangulo.png')
+imagen = cv.resize(imagen, (100, 100))
+angulo_rotacion = 0
+umbral_movimiento = 30
+
+cap = cv.VideoCapture(0)
+
+lkparm = dict(winSize=(15, 15), maxLevel=2,
+              criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03))
+
+_, vframe = cap.read()
+vgris = cv.cvtColor(vframe, cv.COLOR_BGR2GRAY)
+
+# Controles
+p0 = np.array(
+    [(100, 100), (200, 100), (100, 200), (200, 200), (500, 100), (600, 100), (500, 200), (600, 200)])  # Cuatro puntos
+p0 = np.float32(p0[:, np.newaxis, :])
+
+mask = np.zeros_like(vframe)
 
 while True:
-    ret, frame = video.read()
-    frame = cv2.flip(frame, 1)
-    if not ret:
-        break
+    _, frame = cap.read()
+    frame = cv.flip(frame, 1)
+    fgris = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    p1, st, err = cv.calcOpticalFlowPyrLK(vgris, fgris, p0, None, **lkparm)
 
-    height, width, channels = frame.shape
-    mask_height, mask_width, mask_channels = mask.shape
+    if p1 is None:
+        vgris = cv.cvtColor(vframe, cv.COLOR_BGR2GRAY)
+        p0 = np.array([(100, 100), (200, 100), (100, 200), (200, 200), (500, 100), (600, 100), (500, 200),
+                       (600, 200)])  # Reiniciar los puntos
+        p0 = np.float32(p0[:, np.newaxis, :])
+        mask = np.zeros_like(vframe)
+        cv.imshow('ventana', frame)
+    else:
+        bp1 = p1[st == 1]
+        bp0 = p0[st == 1]
 
-    # Calcular la posición de la máscara en el centro
-    x_offset = (width - mask_width) // 2
-    y_offset = (height - mask_height) // 2
+        for i, (nv, vj) in enumerate(zip(bp1, bp0)):
+            a, b = (int(x) for x in nv.ravel())
+            c, d = (int(x) for x in vj.ravel())
+            dist = np.linalg.norm(nv.ravel() - vj.ravel())
 
-    # Combinar la máscara con el frame
-    alpha = 0.5
-    beta = 1.0 - alpha
-    frame[y_offset:y_offset+mask_height, x_offset:x_offset+mask_width] = \
-        cv2.addWeighted(frame[y_offset:y_offset+mask_height, x_offset:x_offset+mask_width], beta,
-                        mask, alpha, 0.0)
+            frame = cv.line(frame, (c, d), (a, b), (0, 0, 255), 2)
+            frame = cv.circle(frame, (c, d), 2, (255, 0, 0), -1)
+            frame = cv.circle(frame, (a, b), 3, (0, 255, 0), -1)
 
-    cv2.imshow('Video con mascara', frame)
+            # primer punto
+            if i == 0 and dist > umbral_movimiento:  # Solo para el primer punto
+                angulo_rotacion += 10  # Aumentar el ángulo de rotación
+            # segundo punto
+            if i == 1 and dist > umbral_movimiento:
+                angulo_rotacion -= 10  # Aumentar el ángulo de rotación
+            # tercer punto
+            if i == 2 and dist > umbral_movimiento:
+                imagen = cv.resize(imagen, None, fx=0.9, fy=0.9)
+            # cuarto punto
+            if i == 3 and dist > umbral_movimiento:
+                imagen = cv.resize(imagen, None, fx=1.1, fy=1.1)
+            # quinto punto
+            if i == 4 and dist > umbral_movimiento:
+                traslacion_x += 5
+            # sexto punto
+            if i == 5 and dist > umbral_movimiento:
+                traslacion_x -= 5
+            # septimo punto
+            if i == 6 and dist > umbral_movimiento:
+                traslacion_y += 5
+            # octavo punto
+            if i == 7 and dist > umbral_movimiento:
+                traslacion_y -= 5
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        # posicion de la imagen
+        h, w, _ = imagen.shape
+        center_x = frame.shape[1] // 2 - w // 2 + traslacion_x
+        center_y = frame.shape[0] // 2 - h // 2 + traslacion_y
 
-video.release()
-cv2.destroyAllWindows()
+        # Rotar la imagen
+        M = cv.getRotationMatrix2D((w // 2, h // 2), angulo_rotacion, 1.0)
+        imagen_rotada = cv.warpAffine(imagen, M, (w, h))
+
+        # Superponer la imagen rotada en el marco
+        frame[center_y:center_y + h, center_x:center_x + w] = imagen_rotada
+        cv.imshow('ventana', frame)
+        vgris = fgris.copy()
+
+        if (cv.waitKey(1) & 0xff) == 27:
+            break
+
+cap.release()
+cv.destroyAllWindows()
